@@ -1,0 +1,164 @@
+---
+title: "Practicum I, Part B: Design Normalized Database"
+author: "Mohana Rangubhotla, Jayshree Vinaitheertha"
+date: "CS5200 Database Management Systems, Fall 2026"
+output: pdf_document
+---
+
+# Data We Started With
+
+We designed the schema from every column in the CSV file `restaurant-visits-209874.csv` (209,874 rows, 18 columns) and the two tables in the SQLite file `restaurants-db-02102026.sqlitedb`: `restaurants` (14 rows) and `servers` (67 rows).
+
+CSV columns: RestaurantID, ServerEmpID, ServerName, VisitDate, VisitTime, MealType, PartySize, WaitTime, CustomerName, CustomerPhone, CustomerEmail, LoyaltyMember, FoodBill, TipAmount, FoodDiscountPercentage, PaymentMethod, orderedAlcohol, AlcoholBill.
+
+SQLite restaurants: rID, RestaurantName, City, State, hasTableService.
+
+SQLite servers: EmpID, ServerName, StartDateHired, EndDateHired, HourlyRate, BirthDate, SSN, rID.
+
+## What We Found When Looking at the Data
+
+Before writing the dependencies we checked the full data in R. These are the things that affected our design.
+
+1. The CSV has no ID for a visit. Each row is one visit, so we added a surrogate key, VisitID.
+2. Customer name, phone and email are only filled in when LoyaltyMember is TRUE (83,939 rows). For the other 125,935 rows they are blank. Each email always goes with the same name and phone, and the other way around. There are 17 different customers.
+3. 74,874 visits have no server (ServerEmpID is blank and ServerName is "N/A").
+4. Every ServerEmpID in the CSV is in the SQLite servers table, and a server only ever shows up at one restaurant, which is the same as their rID in SQLite.
+5. orderedAlcohol is yes exactly when AlcoholBill is more than 0.
+6. FoodDiscountPercentage is only non zero for loyalty members.
+7. The SQLite servers table has three EmpIDs that show up twice. 83459 is an exact copy, and 93168 and 80238 show up with two different hourly rates. EmpID should still be the key, so we deal with the duplicates when loading.
+8. Some values are placeholders or impossible: PartySize 99 means unknown (8 rows), WaitTime is negative in 456 rows, VisitTime is blank in 12,592 rows, EndDateHired is blank for servers who still work there, and some servers have no BirthDate or SSN. We store all of these as NULL.
+
+# Question 1: Functional Dependencies
+
+Question: For the relation represented by all of the columns in the CSV file and the tables in the SQLite database, define all functional dependencies and list them.
+
+If we put everything into one relation and add VisitID, we get:
+
+$$
+\begin{aligned}
+U(\,&VisitID, RestaurantID, RestaurantName, City, State, hasTableService,\\
+&ServerEmpID, ServerName, StartDateHired, EndDateHired, HourlyRate,\\
+&BirthDate, SSN, ServerRestaurantID, VisitDate, VisitTime, MealType,\\
+&PartySize, WaitTime, CustomerName, CustomerPhone, CustomerEmail,\\
+&LoyaltyMember, FoodBill, TipAmount, FoodDiscountPercentage,\\
+&PaymentMethod, orderedAlcohol, AlcoholBill\,)
+\end{aligned}
+$$
+
+We called the rID column from the servers table ServerRestaurantID so it does not get mixed up with the restaurant of the visit.
+
+FD1, the visit:
+$$
+\begin{aligned}
+VisitID \rightarrow\ &RestaurantID, ServerEmpID, CustomerEmail, VisitDate, VisitTime,\\
+&MealType, PartySize, WaitTime, FoodBill, TipAmount,\\
+&FoodDiscountPercentage, PaymentMethod, AlcoholBill, orderedAlcohol
+\end{aligned}
+$$
+
+FD2, the restaurant:
+$$
+RestaurantID \rightarrow RestaurantName, City, State, hasTableService
+$$
+
+FD3, the server:
+$$
+\begin{aligned}
+ServerEmpID \rightarrow\ &ServerName, StartDateHired, EndDateHired, HourlyRate,\\
+&BirthDate, SSN, ServerRestaurantID
+\end{aligned}
+$$
+
+FD4, the customer:
+$$
+CustomerEmail \rightarrow CustomerName, CustomerPhone, LoyaltyMember
+$$
+
+FD5, phone also identifies a customer:
+$$
+CustomerPhone \rightarrow CustomerEmail
+$$
+
+FD6, SSN also identifies a server (when it is there):
+$$
+SSN \rightarrow ServerEmpID
+$$
+
+FD7, orderedAlcohol can be worked out from the alcohol bill:
+$$
+AlcoholBill \rightarrow orderedAlcohol
+$$
+
+The only candidate key of $U$ is $\{VisitID\}$. FD2 to FD7 all have something other than the key on the left side, so they are transitive dependencies through VisitID and have to be split out.
+
+# Question 2: Decomposition to 3NF
+
+Question: Using the functional dependencies and the rules of normalization, decompose the relation from the CSV and the SQLite database into several relations that all satisfy 3NF; give the relations reasonable names.
+
+1NF: every value is atomic and VisitID identifies each row, so $U$ is in 1NF.
+
+2NF: the key is one attribute, so there cannot be a partial dependency. $U$ is in 2NF.
+
+3NF: $U$ is not in 3NF because of FD2, FD3, FD4 and FD7. We fixed each one like this:
+
+1. FD2: the restaurant columns go into their own table, restaurants, with key rid.
+2. FD3: the server columns go into servers, with key emp\_id.
+3. FD4 and FD5: the customer columns go into customers. We added a surrogate key cid and kept customer\_email unique.
+4. FD7: since orderedAlcohol comes straight from AlcoholBill, we do not store it. If we need it we can use alcohol\_bill > 0.
+5. MealType and PaymentMethod are categories that are not true or false, so we put them in two lookup tables, meal\_types and payment\_methods.
+
+This gives us these tables (primary key underlined, FK marks a foreign key):
+
+$$
+restaurants(\underline{rid}, restaurant\_name, city, state, has\_table\_service)
+$$
+
+$$
+\begin{aligned}
+servers(\,&\underline{emp\_id}, server\_name, start\_date\_hired, end\_date\_hired,\\
+&hourly\_rate, birth\_date, ssn, rid_{FK})
+\end{aligned}
+$$
+
+$$
+customers(\underline{cid}, customer\_name, customer\_phone, customer\_email, loyalty\_member)
+$$
+
+$$
+meal\_types(\underline{mtid}, meal\_type)
+$$
+
+$$
+payment\_methods(\underline{pmid}, payment\_method)
+$$
+
+$$
+\begin{aligned}
+visits(\,&\underline{vid}, rid_{FK}, emp\_id_{FK}, cid_{FK}, visit\_date, visit\_time, mtid_{FK},\\
+&party\_size, wait\_time, food\_bill, tip\_amount, food\_discount\_pct,\\
+&pmid_{FK}, alcohol\_bill)
+\end{aligned}
+$$
+
+Checking the result: in each table, anything that determines other columns is a key (the primary key, or customer\_email, customer\_phone or ssn), so every table is in 3NF, and actually also in BCNF. The split is lossless because every table joins back to visits on its key, and FD1 to FD6 each fit inside one table. FD7 is kept because we can always calculate it.
+
+A few decisions we want to explain:
+
+1. We kept rid in visits even though servers also have a restaurant because 74,874 visits have no server and would lose their restaurant otherwise. That is also why emp\_id and cid can be NULL in visits.
+2. A visit with no cid is a non member visit, so loyalty is stored once per customer instead of on every visit.
+3. Placeholder or impossible values (PartySize 99, negative WaitTime, blank VisitTime, blank dates, blank SSN) are stored as NULL instead of fake numbers so they do not throw off averages.
+
+# Questions 3 and 4: Entity Relationship Diagram
+
+Question: Create an ERD in IE (Crow's Feet) notation using LucidChart with all attributes, primary and foreign keys, data types, and entity descriptions, and embed it as an image.
+
+![ERD in Crow's Feet notation, made in LucidChart](erd.pdf){width=100%}
+
+How the tables connect:
+
+1. One restaurant has many visits and every visit is at exactly one restaurant.
+2. One restaurant has many servers and every server works at one restaurant.
+3. A visit has zero or one server and a server can have many visits.
+4. A visit has zero or one loyalty customer and a customer can have many visits.
+5. Every visit has one meal type and one payment method.
+

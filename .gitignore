@@ -1,0 +1,9 @@
+dbConfig.R
+private/
+data/
+.Rhistory
+.RData
+.Rproj.user/
+*.knit.md
+*.tex
+*.log
